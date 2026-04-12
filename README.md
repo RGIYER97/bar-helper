@@ -1,5 +1,7 @@
 # Bar Help
 
+**Repository:** [github.com/RGIYER97/bar-helper](https://github.com/RGIYER97/bar-helper)
+
 A small web app that suggests cocktails from what you have on hand. Add ingredients as tags, search a public recipe database, or ask an LLM for tailored recommendations. Save favorites, rate them, and keep notes — all stored in your browser.
 
 ## Features
