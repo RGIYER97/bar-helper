@@ -8,7 +8,8 @@ A small web app that suggests cocktails from what you have on hand. Add ingredie
 
 - **Ingredient tags** — type to add chips; optional autocomplete; persist your list in `localStorage`.
 - **Find Drinks** — queries [TheCocktailDB](https://www.thecocktaildb.com/) and only shows drinks you can make from **subsets** of your ingredients (not every tag required in one recipe).
-- **Get Creative (AI)** — sends your ingredients (and an optional “mood” prompt) to the Google Gemini API; returns several ranked drink ideas with recipes. Models are tried in order with fallbacks if one is rate-limited or unavailable.
+- **Get Creative (AI)** — sends your ingredients (and an optional “mood” prompt) to the **Google Gemini API** for recipe JSON. Several Gemini models are tried in order with fallbacks if one is rate-limited or unavailable.
+- **AI drink images** (optional) — **OpenRouter** calls **`black-forest-labs/flux.2-klein-4b`** (FLUX.2 [klein] 4B) via chat completions. Images are cached in **IndexedDB** (plus in-memory) and **concurrent requests for the same drink are deduplicated** so parallel cards do not double-bill the image API.
 - **US fl oz** — ingredient measures and instruction text for database drinks are shown in fluid ounces where a volume unit is detected.
 - **Saved drinks** — same card layout as Discover (image, ingredients, instructions), plus star rating, tasting notes, remove, and sort by recency or rating.
 
@@ -17,11 +18,13 @@ A small web app that suggests cocktails from what you have on hand. Add ingredie
 - [React 18](https://react.dev/) + [Vite 5](https://vitejs.dev/)
 - [Tailwind CSS](https://tailwindcss.com/)
 - `localStorage` via a small hook (ingredients, saved drinks, sort preference)
+- **IndexedDB** for AI-generated image URLs / data URLs (`src/utils/imageCache.js`)
 
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 18+ (20+ recommended for latest tooling)
-- A **Gemini API key** (free tier at [Google AI Studio](https://aistudio.google.com/apikey)) — required only for the AI button
+- A **Gemini API key** (free tier at [Google AI Studio](https://aistudio.google.com/apikey)) — required for AI drink recipes
+- An **OpenRouter API key** ([openrouter.ai/keys](https://openrouter.ai/keys)) — optional, used for AI drink images
 
 ## Setup
 
@@ -31,7 +34,10 @@ npm install
 cp .env.example .env
 ```
 
-Edit `.env` and set `VITE_GEMINI_API_KEY` to your key. Do not commit `.env` (it is listed in `.gitignore`).
+Edit `.env` and set `VITE_GEMINI_API_KEY`.  
+Optionally set `VITE_OPENROUTER_API_KEY` to enable AI-generated drink images.
+
+**Do not commit `.env`.** It is listed in `.gitignore` and must stay local-only. Keys in `VITE_*` variables are embedded in the client bundle at build time — treat them like public credentials and restrict keys in each provider’s dashboard (HTTP referrer, usage caps, etc.).
 
 ## Scripts
 
@@ -41,11 +47,14 @@ Edit `.env` and set `VITE_GEMINI_API_KEY` to your key. Do not commit `.env` (it 
 | `npm run build` | Production build → `dist/` |
 | `npm run preview` | Serve the production build locally |
 
+Dev and preview both use **port 5173** (`vite.config.js`) so `localStorage` for the app shares the same origin whether you run `dev` or `preview`.
+
 ## Environment variables
 
 | Variable               | Required for AI | Description        |
 | ---------------------- | --------------- | ------------------ |
-| `VITE_GEMINI_API_KEY`  | Yes             | Google Gemini API key |
+| `VITE_GEMINI_API_KEY`  | Yes (for AI recipes) | Google Gemini API key |
+| `VITE_OPENROUTER_API_KEY` | No (for AI images) | OpenRouter API key; image model `black-forest-labs/flux.2-klein-4b` |
 
 The CocktailDB calls use their public JSON API and need no key.
 
@@ -61,7 +70,8 @@ src/
     StarRating.jsx
   hooks/useLocalStorage.js
   utils/
-    api.js                # CocktailDB + Gemini
+    api.js                # CocktailDB, Gemini recipes, OpenRouter images
+    imageCache.js         # IndexedDB + memory cache + in-flight dedupe
     formatMeasureToOz.js  # cl/ml → oz helpers
 ```
 

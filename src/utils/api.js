@@ -1,3 +1,5 @@
+import { getCachedImage, setCachedImage, dedupeImageFetch } from "./imageCache.js";
+
 const COCKTAIL_DB_BASE = "https://www.thecocktaildb.com/api/json/v1/1";
 
 /** TheCocktailDB returns `drinks` as an array, null, or occasionally a single object. */
@@ -318,9 +320,126 @@ function extractRetrySeconds(errorBody) {
   return null;
 }
 
+const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
+/** FLUX.2 [klein] 4B via OpenRouter — same model family, unified billing/key. */
+const OPENROUTER_FLUX_KLEIN_MODEL = "black-forest-labs/flux.2-klein-4b";
+
+/**
+ * Build a descriptive text-to-image prompt for a cocktail.
+ * FLUX.2 [klein] responds best to scene-first prose describing what to show.
+ * @see https://docs.bfl.ml/guides/prompting_guide_flux2_klein.md
+ */
+function buildFluxDrinkPrompt(recipe) {
+  const glass = recipe.glass || "a classic cocktail glass";
+  const ingLine = recipe.ingredients
+    .map((row) => [row.measure, row.name].filter(Boolean).join(" ").trim())
+    .filter(Boolean)
+    .join(", ");
+  return [
+    `A professional bar photograph of a perfectly crafted cocktail called '${recipe.name}',`,
+    `served in ${glass}.`,
+    ingLine ? `The drink contains ${ingLine}.` : "",
+    `Studio bar lighting, shallow depth of field, dark moody background, bokeh, photorealistic.`,
+    `No people, no text, no labels, no logos. Shot on 50mm lens.`,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 1800);
+}
+
+function extractOpenRouterImageUrl(message) {
+  const images = message?.images;
+  if (Array.isArray(images) && images.length) {
+    const first = images[0];
+    const direct = first?.image_url?.url ?? first?.imageUrl?.url;
+    if (typeof direct === "string" && direct.trim()) return direct.trim();
+  }
+
+  // Fallback shape some providers return via OpenAI-style content parts.
+  const content = message?.content;
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      const maybeUrl =
+        part?.image_url?.url ??
+        part?.imageUrl?.url ??
+        part?.url ??
+        part?.source?.url;
+      if (typeof maybeUrl === "string" && maybeUrl.trim()) return maybeUrl.trim();
+    }
+  }
+
+  // Last resort: extract inline data URL from text payload.
+  const contentText = typeof content === "string" ? content : "";
+  const m = contentText.match(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+/);
+  if (m && m[0]) return m[0].replace(/\s+/g, "");
+
+  return null;
+}
+
+/**
+ * Generate one cocktail image via OpenRouter (FLUX.2 [klein] 4B).
+ * Returns a data URL or HTTPS URL, or null on failure.
+ * Responses are typically base64 data URLs — cacheable without expiry issues.
+ * @see https://openrouter.ai/docs/guides/overview/multimodal/image-generation
+ */
+/**
+ * Fetch (or return cached) one cocktail image via OpenRouter.
+ * Wrapped in dedupeImageFetch so parallel calls for the same drink share one request.
+ */
+function fetchFluxDrinkImage(openRouterApiKey, recipe) {
+  return dedupeImageFetch(recipe, async () => {
+    const cached = await getCachedImage(recipe);
+    if (cached) return cached;
+
+    const prompt = buildFluxDrinkPrompt(recipe);
+
+    let res;
+    try {
+      res = await fetch(OPENROUTER_CHAT_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openRouterApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: OPENROUTER_FLUX_KLEIN_MODEL,
+          messages: [{ role: "user", content: prompt }],
+          modalities: ["image"],
+          image_config: { aspect_ratio: "4:3" },
+        }),
+      });
+    } catch {
+      return null;
+    }
+
+    if (!res.ok) {
+      if (import.meta.env.DEV) {
+        const body = await res.text().catch(() => "");
+        console.warn("[OpenRouter image generation failed]", res.status, body.slice(0, 400));
+      }
+      return null;
+    }
+
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      return null;
+    }
+
+    const url = extractOpenRouterImageUrl(data?.choices?.[0]?.message);
+    if (!url) return null;
+
+    await setCachedImage(recipe, url);
+    return url;
+  });
+}
+
 export async function fetchCreativeDrinks(ingredients, moodPrompt = "") {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (!apiKey) throw new Error("Missing VITE_GEMINI_API_KEY in your .env file");
+
+  const openRouterApiKey = import.meta.env.VITE_OPENROUTER_API_KEY ?? null;
 
   let lastError = null;
 
@@ -419,17 +538,26 @@ export async function fetchCreativeDrinks(ingredients, moodPrompt = "") {
       continue;
     }
 
-    return recipes.map((recipe, idx) => ({
-      id: `creative-${Date.now()}-${idx}`,
-      name: recipe.name,
-      tagline: recipe.tagline,
-      image: null,
-      instructions: recipe.instructions,
-      ingredients: recipe.ingredients,
-      glass: recipe.glass,
-      matchCount: ingredients.length,
-      source: "gemini",
-    }));
+    const batchTs = Date.now();
+    const drinks = await Promise.all(
+      recipes.map(async (recipe, idx) => {
+        const image = openRouterApiKey
+          ? await fetchFluxDrinkImage(openRouterApiKey, recipe)
+          : null;
+        return {
+          id: `creative-${batchTs}-${idx}`,
+          name: recipe.name,
+          tagline: recipe.tagline,
+          image,
+          instructions: recipe.instructions,
+          ingredients: recipe.ingredients,
+          glass: recipe.glass,
+          matchCount: ingredients.length,
+          source: "gemini",
+        };
+      }),
+    );
+    return drinks;
   }
 
   throw new Error(lastError ?? "All Gemini models are currently unavailable.");
