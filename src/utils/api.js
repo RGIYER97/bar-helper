@@ -1,0 +1,436 @@
+const COCKTAIL_DB_BASE = "https://www.thecocktaildb.com/api/json/v1/1";
+
+/** TheCocktailDB returns `drinks` as an array, null, or occasionally a single object. */
+function coerceDrinksArray(drinks) {
+  if (drinks == null) return [];
+  if (Array.isArray(drinks)) return drinks;
+  if (typeof drinks === "object" && drinks.idDrink) return [drinks];
+  return [];
+}
+
+/** Assumed on hand — not required in the user's list. */
+const PANTRY_ALWAYS = new Set([
+  "ice",
+  "water",
+  "salt",
+  "sugar",
+]);
+
+/**
+ * If the drink name is "A B" and the user only supplied "A", we still allow it when B is
+ * something like "juice" but not when B is another spirit/product (e.g. "orange bitters").
+ */
+const DISTINGUISHING_SECOND_WORD = new Set([
+  "bitters",
+  "vermouth",
+  "liqueur",
+  "brandy",
+  "wine",
+  "schnapps",
+  "vodka",
+  "gin",
+  "rum",
+  "tequila",
+  "whiskey",
+  "whisky",
+  "bourbon",
+  "scotch",
+  "cognac",
+  "absinthe",
+  "mezcal",
+  "pisco",
+  "sake",
+  "beer",
+  "cider",
+  "extract",
+  "aperitif",
+  "cordial",
+]);
+
+function normIng(s) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** True if `needle` appears in `hay` as a whole phrase (not a substring of one word). */
+function wholePhrase(hay, needle) {
+  const h = normIng(hay);
+  const n = normIng(needle);
+  if (!n) return false;
+  return new RegExp(`(^|\\s)${escapeRe(n)}(\\s|$)`).test(h);
+}
+
+/**
+ * True if the user can supply this cocktail ingredient from their list (names are fuzzy).
+ */
+function userCoversDrinkIngredient(neededRaw, userListNorm) {
+  const needed = normIng(neededRaw);
+  if (!needed || PANTRY_ALWAYS.has(needed)) return true;
+
+  const needToks = needed.split(/\s+/);
+
+  for (const u of userListNorm) {
+    if (!u) continue;
+    if (needed === u) return true;
+
+    if (wholePhrase(needed, u)) {
+      if (u === needToks[0] && needToks.length > 1) {
+        const second = needToks[1];
+        if (DISTINGUISHING_SECOND_WORD.has(second)) {
+          if (userListNorm.includes(needed)) return true;
+          if (userListNorm.some((x) => x === second)) return true;
+          continue;
+        }
+      }
+      return true;
+    }
+
+    if (wholePhrase(u, needed)) return true;
+  }
+
+  return false;
+}
+
+function drinkOnlyUsesUserIngredients(drink, userListNorm) {
+  return drink.ingredients.every((row) =>
+    userCoversDrinkIngredient(row.name, userListNorm),
+  );
+}
+
+/**
+ * Fetch drinks from TheCocktailDB the user can make with only their ingredients.
+ * The API only filters by one ingredient at a time, so we fan-out, merge candidates,
+ * fetch full recipes, then keep drinks whose full ingredient list is covered by the user.
+ */
+export async function fetchDrinksByIngredients(ingredients) {
+  if (!ingredients.length) return [];
+
+  const userListNorm = [...new Set(ingredients.map(normIng).filter(Boolean))];
+
+  const fetches = ingredients.map((ing) =>
+    fetch(`${COCKTAIL_DB_BASE}/filter.php?i=${encodeURIComponent(ing)}`)
+      .then((r) => r.json())
+      .then((data) => coerceDrinksArray(data?.drinks))
+      .catch(() => []),
+  );
+
+  const results = await Promise.all(fetches);
+
+  const hitCount = {};
+  const drinkMap = {};
+
+  results.forEach((drinks) => {
+    drinks.forEach((d) => {
+      hitCount[d.idDrink] = (hitCount[d.idDrink] || 0) + 1;
+      drinkMap[d.idDrink] = d;
+    });
+  });
+
+  const ranked = Object.entries(hitCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 60)
+    .map(([id, matchCount]) => ({ ...drinkMap[id], matchCount }));
+
+  const detailed = await Promise.all(
+    ranked.map((d) =>
+      fetch(`${COCKTAIL_DB_BASE}/lookup.php?i=${d.idDrink}`)
+        .then((r) => r.json())
+        .then((data) => {
+          const list = coerceDrinksArray(data?.drinks);
+          const full = list[0];
+          if (!full) return null;
+          return normalizeCocktailDB(full, d.matchCount);
+        })
+        .catch(() => null),
+    ),
+  );
+
+  return detailed
+    .filter(Boolean)
+    .filter((d) => drinkOnlyUsesUserIngredients(d, userListNorm));
+}
+
+function normalizeCocktailDB(d, matchCount) {
+  const ingredients = [];
+  for (let i = 1; i <= 15; i++) {
+    const ing = d[`strIngredient${i}`];
+    const measure = d[`strMeasure${i}`];
+    if (ing) ingredients.push({ name: ing.trim(), measure: measure?.trim() || "" });
+  }
+
+  return {
+    id: d.idDrink,
+    name: d.strDrink,
+    image: d.strDrinkThumb,
+    instructions: d.strInstructions,
+    ingredients,
+    matchCount,
+    source: "cocktaildb",
+  };
+}
+
+const GEMINI_SYSTEM_PROMPT = `You are a world-class mixologist. The user will list the ingredients they have on hand and optionally describe the mood or type of drinks they are looking for. Your job is to recommend the BEST drinks that can be made from a SUBSET of those ingredients — you do NOT need to use every ingredient in every drink.
+
+Guidelines:
+- Return 3–5 drinks (use your judgment — fewer if the ingredient set is narrow, more if there is variety).
+- If the user describes a mood or preference (e.g. 'something refreshing', 'tiki vibes', 'strong and spirit-forward'), prioritize drinks that match that vibe. Otherwise, vary flavor profiles on your own.
+- Rank them by how delicious/impressive they are — put the best one first.
+- You may assume the user also has ice, water, and simple garnishes (salt/sugar rims, common fruit wedges).
+- Each drink should use only ingredients from the provided list (plus the assumed basics above).
+- Use US fluid ounces (oz) for all liquid measures.
+- Keep each instructions field under 350 characters.
+- In every string value avoid double-quote characters; use single quotes if needed.`;
+
+/** Forces API-level structured JSON so strings are properly escaped. */
+const GEMINI_RECIPE_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    drinks: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          name: { type: "STRING" },
+          tagline: { type: "STRING" },
+          ingredients: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                name: { type: "STRING" },
+                measure: { type: "STRING" },
+              },
+              required: ["name", "measure"],
+            },
+          },
+          instructions: { type: "STRING" },
+          glass: { type: "STRING" },
+        },
+        required: ["name", "tagline", "ingredients", "instructions", "glass"],
+      },
+    },
+  },
+  required: ["drinks"],
+};
+
+function stripMarkdownJsonFence(text) {
+  let s = text.trim();
+  const fence = /^```(?:json)?\s*([\s\S]*?)```\s*$/im.exec(s);
+  if (fence) s = fence[1].trim();
+  return s;
+}
+
+/** Extract the outermost JSON structure (object or array) via brace/bracket matching. */
+function extractJson(text) {
+  const s = stripMarkdownJsonFence(text);
+  try {
+    return JSON.parse(s);
+  } catch {
+    /* try substring extraction */
+  }
+
+  const openChars = { "{": "}", "[": "]" };
+  let startIdx = -1;
+  let closeChar = null;
+  for (let i = 0; i < s.length; i++) {
+    if (openChars[s[i]]) {
+      startIdx = i;
+      closeChar = openChars[s[i]];
+      break;
+    }
+  }
+  if (startIdx < 0) throw new Error("No JSON in model response");
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  const openChar = s[startIdx];
+  for (let i = startIdx; i < s.length; i++) {
+    const c = s[i];
+    if (escape) { escape = false; continue; }
+    if (c === "\\" && inString) { escape = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === openChar) depth++;
+    else if (c === closeChar) {
+      depth--;
+      if (depth === 0) return JSON.parse(s.slice(startIdx, i + 1));
+    }
+  }
+
+  throw new Error("Incomplete JSON in model response — try again.");
+}
+
+/** Given the parsed payload, pull out the drinks array (handles both wrapper and bare array). */
+function extractDrinksArray(parsed) {
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && Array.isArray(parsed.drinks)) return parsed.drinks;
+  if (parsed && typeof parsed === "object" && parsed.name) return [parsed];
+  throw new Error("Unexpected response shape from model");
+}
+
+function normalizeRecipePayload(recipe) {
+  if (!recipe || typeof recipe !== "object") {
+    throw new Error("Invalid recipe shape from model");
+  }
+  const ingredients = Array.isArray(recipe.ingredients)
+    ? recipe.ingredients.map((row) => ({
+        name: String(row?.name ?? "").trim(),
+        measure: String(row?.measure ?? "").trim(),
+      }))
+    : [];
+  return {
+    name: String(recipe.name ?? "Custom drink").trim() || "Custom drink",
+    tagline: String(recipe.tagline ?? "").trim(),
+    instructions: String(recipe.instructions ?? "").trim(),
+    glass: String(recipe.glass ?? "").trim(),
+    ingredients,
+  };
+}
+
+/**
+ * Models to try in order — skips any that return 429 (rate-limited) or 404 (unavailable).
+ * Gemma 3 1B is not available on the Gemini API; gemma-4-e2b-it (2B) is the smallest
+ * Gemma model the API supports and is used as the last-resort fallback.
+ */
+const GEMINI_MODELS = [
+  "gemini-2.5-flash",          // Gemini 2.5 Flash
+  "gemini-3.1-flash-lite-preview", // Gemini 3.1 Flash Lite
+  "gemini-2.5-flash-lite",     // Gemini 2.5 Flash Lite
+  "gemini-3-flash-preview",    // Gemini 3 Flash
+  "gemma-4-e2b-it",            // Gemma 4 2B (smallest available; Gemma 3 1B not on API)
+];
+
+function extractRetrySeconds(errorBody) {
+  try {
+    const json = typeof errorBody === "string" ? JSON.parse(errorBody) : errorBody;
+    const delay = json?.error?.details?.find((d) => d.retryDelay)?.retryDelay;
+    if (delay) return parseInt(delay, 10);
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+export async function fetchCreativeDrinks(ingredients, moodPrompt = "") {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) throw new Error("Missing VITE_GEMINI_API_KEY in your .env file");
+
+  let lastError = null;
+
+  for (const model of GEMINI_MODELS) {
+    const basePayload = {
+      system_instruction: { parts: [{ text: GEMINI_SYSTEM_PROMPT }] },
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: [
+                `My available ingredients: ${ingredients.join(", ")}.`,
+                moodPrompt.trim() ? `\nWhat I'm in the mood for: ${moodPrompt.trim()}` : "",
+                `\nRecommend the best drinks I can make.`,
+              ].join(""),
+            },
+          ],
+        },
+      ],
+    };
+
+    const trySchema = async (useResponseSchema) => {
+      const generationConfig = {
+        temperature: 0.85,
+        maxOutputTokens: 2048,
+        responseMimeType: "application/json",
+        ...(useResponseSchema ? { responseSchema: GEMINI_RECIPE_RESPONSE_SCHEMA } : {}),
+      };
+      return fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...basePayload, generationConfig }),
+        },
+      );
+    };
+
+    let res = await trySchema(true);
+    if (res.status === 400) {
+      const errText = await res.text();
+      if (/responseSchema|response_schema|schema/i.test(errText)) {
+        res = await trySchema(false);
+      } else {
+        throw new Error(`Gemini API error: ${errText}`);
+      }
+    }
+
+    if (res.status === 429) {
+      const body = await res.text();
+      const retrySecs = extractRetrySeconds(body);
+      lastError = retrySecs
+        ? `Rate limit hit. Try again in ${retrySecs} seconds.`
+        : "Rate limit hit on all Gemini models. Try again in a minute.";
+      continue;
+    }
+
+    if (res.status === 404) {
+      lastError = `Model ${model} not found, trying next…`;
+      continue;
+    }
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Gemini API error: ${err}`);
+    }
+
+    const data = await res.json();
+    const cand = data.candidates?.[0];
+    const finish = cand?.finishReason;
+    if (finish && finish !== "STOP" && finish !== "MAX_TOKENS") {
+      lastError = `Model stopped (${finish}). Try again or adjust ingredients.`;
+      continue;
+    }
+
+    const parts = cand?.content?.parts ?? [];
+    const text = parts.map((p) => p.text ?? "").join("").trim();
+    if (!text) {
+      lastError = "Empty response from the model. Try again.";
+      continue;
+    }
+
+    let recipes;
+    try {
+      const parsed = extractJson(text);
+      const rawList = extractDrinksArray(parsed);
+      recipes = rawList.map(normalizeRecipePayload);
+    } catch (e) {
+      lastError = e.message || "Could not read the recipe JSON.";
+      continue;
+    }
+
+    if (!recipes.length) {
+      lastError = "Model returned no drinks — try again.";
+      continue;
+    }
+
+    return recipes.map((recipe, idx) => ({
+      id: `creative-${Date.now()}-${idx}`,
+      name: recipe.name,
+      tagline: recipe.tagline,
+      image: null,
+      instructions: recipe.instructions,
+      ingredients: recipe.ingredients,
+      glass: recipe.glass,
+      matchCount: ingredients.length,
+      source: "gemini",
+    }));
+  }
+
+  throw new Error(lastError ?? "All Gemini models are currently unavailable.");
+}
