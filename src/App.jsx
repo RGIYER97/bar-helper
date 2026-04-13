@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import IngredientInput from "./components/IngredientInput";
 import DrinkCard from "./components/DrinkCard";
 import SavedDrinks from "./components/SavedDrinks";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { fetchDrinksByIngredients, fetchCreativeDrinks } from "./utils/api";
+import { setCachedImage, isDataImageUrl } from "./utils/imageCache.js";
 
 const TABS = ["discover", "saved"];
 
@@ -17,6 +18,40 @@ export default function App() {
   const [tab, setTab] = useState("discover");
   const [moodPrompt, setMoodPrompt] = useState("");
   const [savedDrinks, setSavedDrinks] = useLocalStorage("bar-help-saved", []);
+  const savedDrinksRef = useRef(savedDrinks);
+  savedDrinksRef.current = savedDrinks;
+
+  /**
+   * One-shot: move legacy base64 images out of localStorage into IndexedDB.
+   * Uses a snapshot so we do not clobber saves that happen while migration runs.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    const snapshot = savedDrinksRef.current;
+    (async () => {
+      if (!snapshot.some((d) => isDataImageUrl(d.image))) return;
+      const migrated = [];
+      for (const d of snapshot) {
+        if (cancelled) return;
+        if (isDataImageUrl(d.image)) {
+          await setCachedImage(d, d.image);
+          migrated.push({ ...d, image: null });
+        } else migrated.push(d);
+      }
+      if (cancelled) return;
+      setSavedDrinks((latest) => {
+        if (latest.length !== snapshot.length) return latest;
+        for (let i = 0; i < latest.length; i++) {
+          if (latest[i].id !== snapshot[i].id) return latest;
+        }
+        return migrated;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, []);
 
   function addIngredient(ing) {
     setIngredients((prev) => [...prev, ing]);
@@ -58,10 +93,15 @@ export default function App() {
     }
   }
 
-  function saveDrink(drink) {
+  async function saveDrink(drink) {
+    let record = { ...drink, rating: 0, notes: "", savedAt: Date.now() };
+    if (isDataImageUrl(drink.image)) {
+      await setCachedImage(drink, drink.image);
+      record = { ...record, image: null };
+    }
     setSavedDrinks((prev) => {
       if (prev.some((d) => d.id === drink.id)) return prev;
-      return [...prev, { ...drink, rating: 0, notes: "", savedAt: Date.now() }];
+      return [...prev, record];
     });
   }
 

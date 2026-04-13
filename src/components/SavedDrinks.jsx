@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useEffect, useState } from "react";
 import DrinkCard from "./DrinkCard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
+import { getCachedImage } from "../utils/imageCache.js";
 
 const SORT_RECENT = "recent";
 const SORT_OLDEST = "oldest";
@@ -19,6 +20,26 @@ function tieBreakOldest(a, b) {
 
 export default function SavedDrinks({ drinks, onUpdate, onRemove }) {
   const [sortBy, setSortBy] = useLocalStorage("bar-help-saved-sort", SORT_RECENT);
+  /** AI images live in IndexedDB; merge resolved URLs for display. */
+  const [idbImages, setIdbImages] = useState({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const updates = {};
+      await Promise.all(
+        drinks.map(async (d) => {
+          if (d.image || d.source !== "gemini") return;
+          const url = await getCachedImage(d);
+          if (url) updates[d.id] = url;
+        }),
+      );
+      if (!cancelled) setIdbImages((prev) => ({ ...prev, ...updates }));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [drinks]);
 
   const sortedDrinks = useMemo(() => {
     const mode =
@@ -127,7 +148,10 @@ export default function SavedDrinks({ drinks, onUpdate, onRemove }) {
         {sortedDrinks.map((drink) => (
           <DrinkCard
             key={drink.id}
-            drink={drink}
+            drink={{
+              ...drink,
+              image: drink.image || idbImages[drink.id] || null,
+            }}
             savedView
             onRatingChange={(r) => onUpdate(drink.id, { rating: r })}
             onNotesChange={(notes) => onUpdate(drink.id, { notes })}

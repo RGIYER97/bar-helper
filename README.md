@@ -11,7 +11,7 @@ A small web app that suggests cocktails from what you have on hand. Add ingredie
 - **Get Creative (AI)** — sends your ingredients (and an optional “mood” prompt) to the **Google Gemini API** for recipe JSON. Several Gemini models are tried in order with fallbacks if one is rate-limited or unavailable.
 - **AI drink images** (optional) — **OpenRouter** calls **`black-forest-labs/flux.2-klein-4b`** (FLUX.2 [klein] 4B) via chat completions. Images are cached in **IndexedDB** (plus in-memory) and **concurrent requests for the same drink are deduplicated** so parallel cards do not double-bill the image API.
 - **US fl oz** — ingredient measures and instruction text for database drinks are shown in fluid ounces where a volume unit is detected.
-- **Saved drinks** — same card layout as Discover (image, ingredients, instructions), plus star rating, tasting notes, remove, and sort by recency or rating.
+- **Saved drinks** — same card layout as Discover (image, ingredients, instructions), plus star rating, tasting notes, remove, and sort by recency or rating. Large AI images are stored in **IndexedDB**, not inside the `localStorage` JSON, so saves stay under quota and persist across sessions.
 
 ## Tech stack
 
@@ -46,6 +46,9 @@ Optionally set `VITE_OPENROUTER_API_KEY` to enable AI-generated drink images.
 | `npm run dev`  | Start dev server (Vite)  |
 | `npm run build` | Production build → `dist/` |
 | `npm run preview` | Serve the production build locally |
+| `npm run test:e2e` | Playwright: persistence test (tiny PNG in IndexedDB + saved drink in `localStorage`; reload + preview server restart). Requires port **5173** free. |
+
+After `npm install`, run `npx playwright install chromium` once (or the first `test:e2e` will prompt) to download the browser.
 
 Dev and preview both use **port 5173** (`vite.config.js`) so `localStorage` for the app shares the same origin whether you run `dev` or `preview`.
 

@@ -89,6 +89,11 @@ export function drinkImageKey(drink) {
   return `${name}|${ings}`;
 }
 
+/** Large base64 payloads — keep out of `localStorage` (saved drinks JSON). */
+export function isDataImageUrl(s) {
+  return typeof s === "string" && s.startsWith("data:image/");
+}
+
 /**
  * Return cached image URL if present (memory → IndexedDB), or null.
  * Async because IndexedDB reads are async.
