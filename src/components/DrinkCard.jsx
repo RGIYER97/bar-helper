@@ -12,6 +12,7 @@ export default function DrinkCard({
 }) {
   const isCreative = drink.source === "gemini";
   const ingredients = drink.ingredients ?? [];
+  const missingKey = drink.missingIngredient?.toLowerCase().trim();
 
   return (
     <div className="group relative flex flex-col overflow-hidden rounded-2xl border border-gray-800 bg-gray-900 transition hover:border-brand-500/40 hover:shadow-lg hover:shadow-brand-500/5">
@@ -25,6 +26,12 @@ export default function DrinkCard({
       ) : (
         <div className="flex h-48 items-center justify-center bg-gradient-to-br from-brand-500/20 to-purple-900/30">
           <span className="text-5xl">✨</span>
+        </div>
+      )}
+
+      {drink.missingIngredient && (
+        <div className="border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs font-medium text-amber-300">
+          Missing: {drink.missingIngredient}
         </div>
       )}
 
@@ -47,16 +54,20 @@ export default function DrinkCard({
             Ingredients
           </h4>
           <ul className="space-y-0.5 text-sm text-gray-300">
-            {ingredients.map((ing, i) => (
-              <li key={i}>
-                {ing.measure && (
-                  <span className="text-brand-400">
-                    {formatMeasureToOz(ing.measure)}{" "}
-                  </span>
-                )}
-                {ing.name}
-              </li>
-            ))}
+            {ingredients.map((ing, i) => {
+              const isMissing = missingKey && ing.name.toLowerCase().trim() === missingKey;
+              return (
+                <li key={i} className={isMissing ? "text-amber-300" : ""}>
+                  {ing.measure && (
+                    <span className={isMissing ? "text-amber-400" : "text-brand-400"}>
+                      {formatMeasureToOz(ing.measure)}{" "}
+                    </span>
+                  )}
+                  {ing.name}
+                  {isMissing && <span className="ml-1 text-amber-500/70">✕</span>}
+                </li>
+              );
+            })}
           </ul>
         </div>
 
@@ -71,7 +82,7 @@ export default function DrinkCard({
             Instructions
           </h4>
           <p className="text-sm leading-relaxed text-gray-300">
-            {drink.source === "cocktaildb"
+            {drink.source === "cocktaildb" || drink.source === "iba"
               ? formatInstructionTextToOz(drink.instructions ?? "")
               : drink.instructions ?? ""}
           </p>

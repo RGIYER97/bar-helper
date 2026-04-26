@@ -1,4 +1,5 @@
 import { getCachedImage, setCachedImage, dedupeImageFetch } from "./imageCache.js";
+import IBA_COCKTAILS from "../data/iba-cocktails.json";
 
 const COCKTAIL_DB_BASE = "https://www.thecocktaildb.com/api/json/v1/1";
 
@@ -105,13 +106,20 @@ function drinkOnlyUsesUserIngredients(drink, userListNorm) {
   );
 }
 
+/** Returns ingredient names the user cannot cover. */
+function getMissingIngredients(drink, userListNorm) {
+  return drink.ingredients
+    .filter((row) => !userCoversDrinkIngredient(row.name, userListNorm))
+    .map((row) => row.name);
+}
+
 /**
  * Fetch drinks from TheCocktailDB the user can make with only their ingredients.
  * The API only filters by one ingredient at a time, so we fan-out, merge candidates,
  * fetch full recipes, then keep drinks whose full ingredient list is covered by the user.
  */
 export async function fetchDrinksByIngredients(ingredients) {
-  if (!ingredients.length) return [];
+  if (!ingredients.length) return { exact: [], almost: [] };
 
   const userListNorm = [...new Set(ingredients.map(normIng).filter(Boolean))];
 
@@ -153,9 +161,17 @@ export async function fetchDrinksByIngredients(ingredients) {
     ),
   );
 
-  return detailed
-    .filter(Boolean)
-    .filter((d) => drinkOnlyUsesUserIngredients(d, userListNorm));
+  const candidates = detailed.filter(Boolean);
+  const exact = candidates.filter((d) => drinkOnlyUsesUserIngredients(d, userListNorm));
+  const almost = candidates
+    .filter((d) => !drinkOnlyUsesUserIngredients(d, userListNorm))
+    .map((d) => {
+      const missing = getMissingIngredients(d, userListNorm);
+      return missing.length === 1 ? { ...d, missingIngredient: missing[0] } : null;
+    })
+    .filter(Boolean);
+
+  return { exact, almost };
 }
 
 function normalizeCocktailDB(d, matchCount) {
@@ -175,6 +191,78 @@ function normalizeCocktailDB(d, matchCount) {
     matchCount,
     source: "cocktaildb",
   };
+}
+
+/**
+ * Split an IBA "special" free-text ingredient into {name, measure}.
+ * e.g. "2 dashes Angostura Bitters" → { measure: "2 dashes", name: "Angostura Bitters" }
+ *      "6 Mint sprigs"               → { measure: "6", name: "Mint sprigs" }
+ *      "Soda water"                  → { measure: "", name: "Soda water" }
+ */
+function parseIbaSpecial(s) {
+  const m = s.match(
+    /^(\d+(?:[/.]\d+)?)\s+(?:(dashes?|sprigs?|teaspoons?|tablespoons?|shots?|drops?|cubes?|slices?|pieces?|bar\s+spoons?|ml|cl)\s+)?(.+)$/i,
+  );
+  if (m) {
+    const quantity = m[1];
+    const unit = m[2] ? m[2].trim() : "";
+    return { measure: unit ? `${quantity} ${unit}` : quantity, name: m[3].trim() };
+  }
+  return { measure: "", name: s };
+}
+
+function normalizeIba(d, matchCount) {
+  const ingredients = d.ingredients.map((ing) => {
+    if (ing.special != null) return parseIbaSpecial(ing.special);
+    const measure = `${ing.amount} ${ing.unit}`;
+    return { name: ing.label || ing.ingredient, measure };
+  });
+
+  return {
+    id: `iba-${d.name.toLowerCase().replace(/\s+/g, "-")}`,
+    name: d.name,
+    image: null,
+    instructions: d.preparation,
+    ingredients,
+    glass: d.glass ?? null,
+    matchCount,
+    source: "iba",
+  };
+}
+
+/**
+ * Filter IBA official cocktails by the user's ingredient list.
+ * Returns drinks whose full ingredient list is covered, ranked by match count.
+ */
+export function fetchIbaCocktails(ingredients) {
+  if (!ingredients.length) return { exact: [], almost: [] };
+
+  const userListNorm = [...new Set(ingredients.map(normIng).filter(Boolean))];
+
+  const normalized = IBA_COCKTAILS.map((d) => {
+    const norm = normalizeIba(d, 0);
+    const matchCount = norm.ingredients.filter((row) =>
+      userListNorm.some(
+        (u) => wholePhrase(row.name, u) || wholePhrase(u, row.name),
+      ),
+    ).length;
+    return { ...norm, matchCount };
+  });
+
+  const exact = normalized
+    .filter((d) => drinkOnlyUsesUserIngredients(d, userListNorm))
+    .sort((a, b) => b.matchCount - a.matchCount);
+
+  const almost = normalized
+    .filter((d) => !drinkOnlyUsesUserIngredients(d, userListNorm))
+    .map((d) => {
+      const missing = getMissingIngredients(d, userListNorm);
+      return missing.length === 1 ? { ...d, missingIngredient: missing[0] } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.matchCount - a.matchCount);
+
+  return { exact, almost };
 }
 
 const GEMINI_SYSTEM_PROMPT = `You are a world-class mixologist. The user will list the ingredients they have on hand and optionally describe the mood or type of drinks they are looking for. Your job is to recommend the BEST drinks that can be made from a SUBSET of those ingredients — you do NOT need to use every ingredient in every drink.

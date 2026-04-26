@@ -56,13 +56,17 @@ function parseLeadingNumber(str) {
   return null;
 }
 
+/** Snap to nearest 1/4 oz and express as a bartender-readable fraction. */
+const FRAC_LABEL = ["", "1/4", "1/2", "3/4"];
+
 function formatOzValue(oz) {
-  const r = Math.round(oz * 100) / 100;
-  if (Number.isInteger(r) || Math.abs(r - Math.round(r)) < 0.001) {
-    return `${Math.round(r)} oz`;
-  }
-  const t = r.toFixed(2).replace(/\.?0+$/, "");
-  return `${t} oz`;
+  const quarters = Math.round(oz * 4);
+  if (quarters === 0) return null; // too small to express; caller keeps original
+  const whole = Math.floor(quarters / 4);
+  const frac = FRAC_LABEL[quarters % 4];
+  if (whole === 0) return `${frac} oz`;
+  if (!frac) return `${whole} oz`;
+  return `${whole} ${frac} oz`;
 }
 
 /** Find first volume unit in string: { key, start, length } */
@@ -109,11 +113,13 @@ function convertSingle(s) {
 
   if (unit.alreadyOz || unit.key === "oz" || unit.key === "ounce" || unit.key === "ounces") {
     const formatted = formatOzValue(parsed.value);
+    if (formatted == null) return trimmed;
     return after ? `${formatted} ${after}` : formatted;
   }
 
   const oz = (parsed.value * mlPer) / ML_PER_OZ;
   const formatted = formatOzValue(oz);
+  if (formatted == null) return trimmed;
   return after ? `${formatted} ${after}` : formatted;
 }
 

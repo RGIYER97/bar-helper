@@ -2,35 +2,38 @@
 
 **Repository:** [github.com/RGIYER97/bar-helper](https://github.com/RGIYER97/bar-helper)
 
-A small web app that suggests cocktails from what you have on hand. Add ingredients as tags, search a public recipe database, or ask an LLM for tailored recommendations. Save favorites, rate them, and keep notes — all stored in your browser.
+A web app that suggests cocktails from what you have on hand. Add ingredients as tags, search multiple recipe databases, or ask an LLM for tailored recommendations. Save favorites, rate them, and keep notes — all stored in your browser.
 
 ## Cocktail sources
 
-- **TheCocktailDB** — primary recipe catalog for the **Find Drinks** flow.
+- **TheCocktailDB** — crowd-sourced catalog of 600+ recipes, queried by ingredient.
+- **IBA Classics** — 77 official International Bartenders Association recipes, bundled locally (no network call).
 - **Google Gemini API** — AI-generated recipe suggestions for **Get Creative (AI)**.
-- **OpenRouter** (`black-forest-labs/flux.2-klein-4b`) — optional **image generation only** for AI drinks.
+- **OpenRouter** (`black-forest-labs/flux.2-klein-4b`) — optional image generation for AI drinks.
 
 ## Features
 
-- **Ingredient tags** — type to add chips; optional autocomplete; persist your list in `localStorage`.
-- **Find Drinks** — queries [TheCocktailDB](https://www.thecocktaildb.com/) and only shows drinks you can make from **subsets** of your ingredients (not every tag required in one recipe).
-- **Get Creative (AI)** — sends your ingredients (and an optional “mood” prompt) to the **Google Gemini API** for recipe JSON. Several Gemini models are tried in order with fallbacks if one is rate-limited or unavailable.
-- **AI drink images** (optional) — **OpenRouter** calls **`black-forest-labs/flux.2-klein-4b`** (FLUX.2 [klein] 4B) via chat completions. Images are cached in **IndexedDB** (plus in-memory) and **concurrent requests for the same drink are deduplicated** so parallel cards do not double-bill the image API.
-- **US fl oz** — ingredient measures and instruction text for database drinks are shown in fluid ounces where a volume unit is detected.
-- **Saved drinks** — same card layout as Discover (image, ingredients, instructions), plus star rating, tasting notes, remove, and sort by recency or rating. Large AI images are stored in **IndexedDB**, not inside the `localStorage` JSON, so saves stay under quota and persist across sessions.
+- **Ingredient tags** — type to add chips; persist across sessions in `localStorage`.
+- **Find Drinks** — queries TheCocktailDB and IBA simultaneously, showing only drinks you can make from subsets of your ingredients. All measures displayed in US fluid ounces, snapped to the nearest ¼ oz (e.g. `4 cl gin` → `1 1/4 oz`).
+- **IBA Classics** — shown as a separate section; authoritative spec recipes for classics like Negroni, Margarita, and Old Fashioned.
+- **Almost There** — drinks from both databases where you're missing exactly one ingredient, with the missing item highlighted on the card.
+- **What to Buy** — ranks every single missing ingredient by how many drinks it would unlock, so you can see at a glance which one purchase opens the most options.
+- **Get Creative (AI)** — sends your ingredients and an optional mood prompt to Google Gemini for custom recipe JSON. Multiple Gemini models are tried in order with automatic fallback if one is rate-limited.
+- **AI drink images** (optional) — generated via OpenRouter/FLUX. Cached in IndexedDB plus in-memory; concurrent requests for the same drink are deduplicated to avoid double-billing.
+- **Saved drinks** — star rating, tasting notes, remove, and sort by recency or rating. AI images live in IndexedDB rather than `localStorage` to stay under quota.
 
 ## Tech stack
 
 - [React 18](https://react.dev/) + [Vite 5](https://vitejs.dev/)
 - [Tailwind CSS](https://tailwindcss.com/)
-- `localStorage` via a small hook (ingredients, saved drinks, sort preference)
-- **IndexedDB** for AI-generated image URLs / data URLs (`src/utils/imageCache.js`)
+- `localStorage` via a small custom hook (ingredients, saved drinks, sort preference)
+- **IndexedDB** for AI-generated images (`src/utils/imageCache.js`)
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) 18+ (20+ recommended for latest tooling)
-- A **Gemini API key** (free tier at [Google AI Studio](https://aistudio.google.com/apikey)) — required for AI drink recipes
-- An **OpenRouter API key** ([openrouter.ai/keys](https://openrouter.ai/keys)) — optional, used for AI drink images
+- [Node.js](https://nodejs.org/) 18+ (20+ recommended)
+- A **Gemini API key** (free tier at [Google AI Studio](https://aistudio.google.com/apikey)) — required for AI recipes
+- An **OpenRouter API key** ([openrouter.ai/keys](https://openrouter.ai/keys)) — optional, for AI drink images
 
 ## Setup
 
@@ -40,48 +43,45 @@ npm install
 cp .env.example .env
 ```
 
-Edit `.env` and set `VITE_GEMINI_API_KEY`.  
-Optionally set `VITE_OPENROUTER_API_KEY` to enable AI-generated drink images.
+Edit `.env` and set `VITE_GEMINI_API_KEY`. Optionally set `VITE_OPENROUTER_API_KEY` to enable AI-generated drink images.
 
-**Do not commit `.env`.** It is listed in `.gitignore` and must stay local-only. Keys in `VITE_*` variables are embedded in the client bundle at build time — treat them like public credentials and restrict keys in each provider’s dashboard (HTTP referrer, usage caps, etc.).
+**Do not commit `.env`.** Keys in `VITE_*` variables are embedded in the client bundle at build time — treat them like public credentials and restrict them in each provider's dashboard (HTTP referrer, usage caps, etc.).
 
 ## Scripts
 
-| Command        | Description              |
-| -------------- | ------------------------ |
-| `npm run dev`  | Start dev server (Vite)  |
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start dev server (Vite, port 5173) |
 | `npm run build` | Production build → `dist/` |
-| `npm run preview` | Serve the production build locally |
-| `npm run test:e2e` | Playwright: persistence test (tiny PNG in IndexedDB + saved drink in `localStorage`; reload + preview server restart). Requires port **5173** free. |
-
-After `npm install`, run `npx playwright install chromium` once (or the first `test:e2e` will prompt) to download the browser.
-
-Dev and preview both use **port 5173** (`vite.config.js`) so `localStorage` for the app shares the same origin whether you run `dev` or `preview`.
+| `npm run preview` | Serve the production build locally (port 5173) |
+| `npm run test:e2e` | Playwright persistence test — requires a running `preview` server on port 5173. Run `npx playwright install chromium` once first. |
 
 ## Environment variables
 
-| Variable               | Required for AI | Description        |
-| ---------------------- | --------------- | ------------------ |
-| `VITE_GEMINI_API_KEY`  | Yes (for AI recipes) | Google Gemini API key |
-| `VITE_OPENROUTER_API_KEY` | No (for AI images) | OpenRouter API key; image model `black-forest-labs/flux.2-klein-4b` |
+| Variable | Required | Description |
+| --- | --- | --- |
+| `VITE_GEMINI_API_KEY` | Yes (AI recipes) | Google Gemini API key |
+| `VITE_OPENROUTER_API_KEY` | No (AI images) | OpenRouter key; uses `black-forest-labs/flux.2-klein-4b` |
 
-The CocktailDB calls use their public JSON API and need no key.
+TheCocktailDB and IBA use no keys — TheCocktailDB is a public API and IBA data is bundled.
 
-## Project layout (high level)
+## Project layout
 
 ```
 src/
-  App.jsx                 # Tabs, ingredient state, search + AI handlers
+  App.jsx                 # All state; search fans out to CocktailDB + IBA in parallel
+  data/
+    iba-cocktails.json    # Bundled IBA official recipes (77 drinks, measures in cl)
   components/
-    DrinkCard.jsx         # Shared card (Discover + Saved)
+    DrinkCard.jsx         # Shared card (Discover + Saved + Almost There)
     IngredientInput.jsx
     SavedDrinks.jsx       # Sort + grid of saved cards
     StarRating.jsx
   hooks/useLocalStorage.js
   utils/
-    api.js                # CocktailDB, Gemini recipes, OpenRouter images
+    api.js                # CocktailDB + IBA fetching, ingredient matching, Gemini, OpenRouter
     imageCache.js         # IndexedDB + memory cache + in-flight dedupe
-    formatMeasureToOz.js  # cl/ml → oz helpers
+    formatMeasureToOz.js  # Unit conversion; snaps to nearest 1/4 oz, formats as fractions
 ```
 
 ## License

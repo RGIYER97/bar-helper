@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import IngredientInput from "./components/IngredientInput";
 import DrinkCard from "./components/DrinkCard";
 import SavedDrinks from "./components/SavedDrinks";
 import { useLocalStorage } from "./hooks/useLocalStorage";
-import { fetchDrinksByIngredients, fetchCreativeDrinks } from "./utils/api";
+import { fetchDrinksByIngredients, fetchCreativeDrinks, fetchIbaCocktails } from "./utils/api";
 import { setCachedImage, isDataImageUrl } from "./utils/imageCache.js";
 
 const TABS = ["discover", "saved"];
@@ -11,6 +11,8 @@ const TABS = ["discover", "saved"];
 export default function App() {
   const [ingredients, setIngredients] = useLocalStorage("bar-help-ingredients", []);
   const [results, setResults] = useState([]);
+  const [ibaResults, setIbaResults] = useState([]);
+  const [almostDrinks, setAlmostDrinks] = useState([]);
   const [creativeDrinks, setCreativeDrinks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [creativeLoading, setCreativeLoading] = useState(false);
@@ -61,16 +63,52 @@ export default function App() {
     setIngredients((prev) => prev.filter((i) => i !== ing));
   }
 
+  const shoppingList = useMemo(() => {
+    const map = {};
+    almostDrinks.forEach((drink) => {
+      const key = drink.missingIngredient.toLowerCase().trim();
+      if (!map[key]) map[key] = { ingredient: drink.missingIngredient, drinks: [] };
+      map[key].drinks.push(drink.name);
+    });
+    return Object.values(map)
+      .sort((a, b) => b.drinks.length - a.drinks.length)
+      .slice(0, 6);
+  }, [almostDrinks]);
+
   async function handleSearch() {
     if (!ingredients.length) return;
     setLoading(true);
     setError(null);
     setResults([]);
+    setIbaResults([]);
+    setAlmostDrinks([]);
     setCreativeDrinks([]);
     try {
-      const drinks = await fetchDrinksByIngredients(ingredients);
+      const [{ exact: drinks, almost: almostCDB }, { exact: ibaExact, almost: almostIba }] =
+        await Promise.all([
+          fetchDrinksByIngredients(ingredients),
+          Promise.resolve(fetchIbaCocktails(ingredients)),
+        ]);
+
+      const exactNames = new Set(drinks.map((d) => d.name.toLowerCase().trim()));
+      const iba = ibaExact.filter((d) => !exactNames.has(d.name.toLowerCase().trim()));
+
+      // Merge almost lists, deduplicate by name (CocktailDB wins — it has images)
+      const almostSeen = new Set([...exactNames, ...iba.map((d) => d.name.toLowerCase().trim())]);
+      const almost = [];
+      for (const d of [...almostCDB, ...almostIba]) {
+        const key = d.name.toLowerCase().trim();
+        if (!almostSeen.has(key)) {
+          almostSeen.add(key);
+          almost.push(d);
+        }
+      }
+
       setResults(drinks);
-      if (!drinks.length) setError("No drinks found — try different ingredients.");
+      setIbaResults(iba);
+      setAlmostDrinks(almost.slice(0, 18));
+      if (!drinks.length && !iba.length && !almost.length)
+        setError("No drinks found — try different ingredients.");
     } catch (e) {
       setError(e.message);
     } finally {
@@ -244,6 +282,75 @@ export default function App() {
               </h2>
               <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                 {results.map((drink) => (
+                  <DrinkCard
+                    key={drink.id}
+                    drink={drink}
+                    onSave={saveDrink}
+                    isSaved={isSaved(drink.id)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* IBA Classics */}
+          {ibaResults.length > 0 && (
+            <section className="mt-8">
+              <h2 className="mb-1 text-lg font-semibold text-white">
+                IBA Classics
+                <span className="ml-2 text-sm font-normal text-gray-500">
+                  ({ibaResults.length} found)
+                </span>
+              </h2>
+              <p className="mb-4 text-xs text-gray-500">
+                Official International Bartenders Association recipes
+              </p>
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {ibaResults.map((drink) => (
+                  <DrinkCard
+                    key={drink.id}
+                    drink={drink}
+                    onSave={saveDrink}
+                    isSaved={isSaved(drink.id)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* What to Buy */}
+          {shoppingList.length > 0 && (
+            <section className="mt-8">
+              <h2 className="mb-1 text-lg font-semibold text-white">What to Buy</h2>
+              <p className="mb-4 text-xs text-gray-500">
+                One ingredient away from these drinks
+              </p>
+              <div className="flex flex-col gap-3">
+                {shoppingList.map(({ ingredient, drinks }) => (
+                  <div
+                    key={ingredient}
+                    className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3"
+                  >
+                    <span className="font-semibold text-amber-300">{ingredient}</span>
+                    <span className="text-xs text-gray-500">
+                      unlocks {drinks.length} drink{drinks.length > 1 ? "s" : ""}
+                    </span>
+                    <span className="text-sm text-gray-400">{drinks.join(", ")}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Almost There */}
+          {almostDrinks.length > 0 && (
+            <section className="mt-8">
+              <h2 className="mb-1 text-lg font-semibold text-white">Almost There</h2>
+              <p className="mb-4 text-xs text-gray-500">
+                You're one ingredient away from each of these
+              </p>
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {almostDrinks.map((drink) => (
                   <DrinkCard
                     key={drink.id}
                     drink={drink}
