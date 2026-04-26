@@ -4,6 +4,12 @@
 
 A small web app that suggests cocktails from what you have on hand. Add ingredients as tags, search a public recipe database, or ask an LLM for tailored recommendations. Save favorites, rate them, and keep notes — all stored in your browser.
 
+## Cocktail sources
+
+- **TheCocktailDB** — primary recipe catalog for the **Find Drinks** flow.
+- **Google Gemini API** — AI-generated recipe suggestions for **Get Creative (AI)**.
+- **OpenRouter** (`black-forest-labs/flux.2-klein-4b`) — optional **image generation only** for AI drinks.
+
 ## Features
 
 - **Ingredient tags** — type to add chips; optional autocomplete; persist your list in `localStorage`.
