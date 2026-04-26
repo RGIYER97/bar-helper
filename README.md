@@ -13,7 +13,7 @@ A web app that suggests cocktails from what you have on hand. Add ingredients as
 
 ## Features
 
-- **Ingredient tags** — type to add chips; persist across sessions in `localStorage`.
+- **Ingredient tags** — type to add chips with autocomplete across 90 spirits, mixers, and modifiers; arrow-key navigation, bold match highlighting; persist across sessions in `localStorage`.
 - **Find Drinks** — queries TheCocktailDB and IBA simultaneously, showing only drinks you can make from subsets of your ingredients. All measures displayed in US fluid ounces, snapped to the nearest ¼ oz (e.g. `4 cl gin` → `1 1/4 oz`).
 - **IBA Classics** — shown as a separate section; authoritative spec recipes for classics like Negroni, Margarita, and Old Fashioned.
 - **Almost There** — drinks from both databases where you're missing exactly one ingredient, with the missing item highlighted on the card.
@@ -21,6 +21,7 @@ A web app that suggests cocktails from what you have on hand. Add ingredients as
 - **Get Creative (AI)** — sends your ingredients and an optional mood prompt to Google Gemini for custom recipe JSON. Multiple Gemini models are tried in order with automatic fallback if one is rate-limited.
 - **AI drink images** (optional) — generated via OpenRouter/FLUX. Cached in IndexedDB plus in-memory; concurrent requests for the same drink are deduplicated to avoid double-billing.
 - **Saved drinks** — star rating, tasting notes, remove, and sort by recency or rating. AI images live in IndexedDB rather than `localStorage` to stay under quota.
+- **Share recipe** — every drink card has a share button. On iOS/macOS it opens the native share sheet (Messages, AirDrop, etc.); on other browsers it copies the formatted recipe (name, ingredients with oz measures, instructions) to the clipboard.
 
 ## Tech stack
 

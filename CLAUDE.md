@@ -118,7 +118,7 @@ Applied to ingredient measures and free-form instruction text for CocktailDB and
 | `src/utils/imageCache.js` | 3-tier image cache: memory, IndexedDB, in-flight dedup. Key function: `drinkImageKey()` for stable cache lookup. |
 | `src/utils/formatMeasureToOz.js` | Volume unit parsing and conversion; handles mixed numbers, ranges, and instruction text. |
 | `src/hooks/useLocalStorage.js` | Custom hook; syncs state to `localStorage` on every change. Gracefully handles quota exceeded. |
-| `src/components/DrinkCard.jsx` | Shared card layout for both Discover and Saved views. Shows image, ingredients, instructions, and optional rating/notes. |
+| `src/components/DrinkCard.jsx` | Shared card layout for both Discover and Saved views. Shows image, ingredients, instructions, optional rating/notes, and a share button. |
 | `src/components/SavedDrinks.jsx` | Grid with sorting buttons (recent, oldest, rating high/low). Fetches IndexedDB images asynchronously. |
 | `e2e/persistence.spec.js` | Playwright test: saves drink with IndexedDB image, reloads page, kills/restarts preview server, confirms data persists. |
 
@@ -196,6 +196,8 @@ No Redux, Context API, or external state management—App.jsx is the single sour
 7. **Match Count** — CocktailDB results ranked by how many of user's ingredients appear in the drink (higher = better match)
 8. **Almost/Shopping dedup** — `almostSeen` set is seeded with all exact match names before merging almost drinks, so a drink can't appear in both sections
 9. **`missingIngredient` is a single string** — DrinkCard highlights it by lowercased exact match against each ingredient's `name` field; the IBA `label || ingredient` naming ensures the right row lights up
+10. **Ingredient autocomplete list** — `INGREDIENTS` constant in `IngredientInput.jsx` (~90 entries); merged from the full IBA ingredient set plus common spirits/mixers. ArrowUp/Down navigates suggestions; matching substring is bolded via a `highlightMatch` helper that returns a JSX fragment wrapping a `<strong>`.
+11. **Share recipe** — `DrinkCard.handleShare()` tries `navigator.share` first (triggers iOS/macOS native share sheet for Messages, AirDrop, etc.), then falls back to `navigator.clipboard.writeText`. Share text is built by `buildShareText()` using the same `formatMeasureToOz` / `formatInstructionTextToOz` pipeline as the rendered card. A 2-second `shareFeedback` state swaps the icon to a green checkmark on clipboard copy.
 
 ## Common Pitfalls
 

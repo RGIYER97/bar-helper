@@ -1,3 +1,4 @@
+import { useState } from "react";
 import StarRating from "./StarRating";
 import { formatMeasureToOz, formatInstructionTextToOz } from "../utils/formatMeasureToOz";
 
@@ -13,6 +14,43 @@ export default function DrinkCard({
   const isCreative = drink.source === "gemini";
   const ingredients = drink.ingredients ?? [];
   const missingKey = drink.missingIngredient?.toLowerCase().trim();
+  const [shareFeedback, setShareFeedback] = useState(null);
+
+  function buildShareText() {
+    const lines = [drink.name, ""];
+    if (drink.tagline) lines.push(`"${drink.tagline}"`, "");
+    lines.push("Ingredients:");
+    ingredients.forEach((ing) => {
+      const measure = ing.measure ? `${formatMeasureToOz(ing.measure) ?? ing.measure} ` : "";
+      lines.push(`• ${measure}${ing.name}`);
+    });
+    if (drink.glass) lines.push("", `Glass: ${drink.glass}`);
+    const instructions =
+      drink.source === "cocktaildb" || drink.source === "iba"
+        ? formatInstructionTextToOz(drink.instructions ?? "")
+        : (drink.instructions ?? "");
+    lines.push("", "Instructions:", instructions);
+    return lines.join("\n");
+  }
+
+  async function handleShare() {
+    const text = buildShareText();
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: drink.name, text });
+        return;
+      } catch {
+        // user cancelled or API unavailable — fall through to clipboard
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setShareFeedback("copied");
+      setTimeout(() => setShareFeedback(null), 2000);
+    } catch {
+      // ignore
+    }
+  }
 
   return (
     <div className="group relative flex flex-col overflow-hidden rounded-2xl border border-gray-800 bg-gray-900 transition hover:border-brand-500/40 hover:shadow-lg hover:shadow-brand-500/5">
@@ -38,11 +76,29 @@ export default function DrinkCard({
       <div className="flex flex-1 flex-col p-5">
         <div className="mb-2 flex items-start justify-between gap-2">
           <h3 className="text-lg font-semibold text-white">{drink.name}</h3>
-          {isCreative && (
-            <span className="shrink-0 rounded-full bg-brand-500/20 px-2 py-0.5 text-xs font-medium text-brand-300">
-              AI Created
-            </span>
-          )}
+          <div className="flex shrink-0 items-center gap-1.5">
+            {isCreative && (
+              <span className="rounded-full bg-brand-500/20 px-2 py-0.5 text-xs font-medium text-brand-300">
+                AI Created
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={handleShare}
+              title={shareFeedback === "copied" ? "Copied!" : "Share recipe"}
+              className="rounded-full p-1.5 text-gray-400 transition hover:bg-gray-800 hover:text-white"
+            >
+              {shareFeedback === "copied" ? (
+                <svg className="h-4 w-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
 
         {drink.tagline && (
